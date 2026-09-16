@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
+<title>Hammer Outline</title>
+
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #ffffff;
+    touch-action: manipulation;
+  }
+
+  #stage {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+  }
+
+  #canvas {
+    display: block;
+    background: #ffffff;
+    touch-action: manipulation;
+  }
+
+  #hammer {
+    fill: #ffffff;
+    stroke: #000000;
+    stroke-width: 0.8;
+    stroke-linejoin: miter;
+    vector-effect: non-scaling-stroke;
+    shape-rendering: geometricPrecision;
+  }
+</style>
+</head>
+
+<body>
+<div id="stage">
+
+  <!--
+    Coordinate system:
+      width  = 145 mm (iPad screen width)
+      height = 195 mm (iPad screen height)
+
+    Hammer geometry from the supplied drawing ONLY:
+      Head = 50 mm wide x 55 mm high
+      Handle = 18 mm wide x 150 mm long
+      Original total length = 205 mm
+
+    The circular diameter callouts in the drawing are intentionally ignored.
+  -->
+  <svg id="canvas"
+       viewBox="0 0 145 195"
+       preserveAspectRatio="xMidYMid meet"
+       aria-label="Hammer outline">
+
+    <g id="hammer">
+
+      <!--
+        Original hammer geometry in mm.
+        It is centered at x = 72.5 mm.
+
+        Original:
+          head:   x = 47.5 to 97.5, y = 0 to 55
+          handle: x = 63.5 to 81.5, y = 55 to 205
+      -->
+
+      <path d="
+        M 47.5 0
+        H 97.5
+        V 55
+        H 81.5
+        V 205
+        H 63.5
+        V 55
+        H 47.5
+        Z
+      "/>
+
+    </g>
+  </svg>
+</div>
+
+<script>
+(() => {
+
+  // ------------------------------------------------------------
+  // EXPERIMENT SETTINGS
+  // ------------------------------------------------------------
+
+  // Physical dimensions supplied for the iPad display.
+  const SCREEN_WIDTH_MM  = 145;
+  const SCREEN_HEIGHT_MM = 195;
+
+  // Original hammer dimensions from the drawing.
+  const ORIGINAL_HAMMER_LENGTH_MM = 205;
+
+  // Maximum displayed total hammer length = 140 mm = 14 cm.
+  const DISPLAYED_HAMMER_LENGTH_MM = 140;
+
+  // Orientations presented to the child.
+  // The app starts at 0 degrees.
+  // Tapping anywhere on the screen advances to the next orientation.
+  const ORIENTATIONS = [
+    0,
+    45,
+    90,
+    135,
+    180,
+    225,
+    270,
+    315
+  ];
+
+  // ------------------------------------------------------------
+  // CALCULATED SCALE
+  // ------------------------------------------------------------
+
+  // 205 mm original -> 140 mm displayed.
+  const SCALE =
+    DISPLAYED_HAMMER_LENGTH_MM / ORIGINAL_HAMMER_LENGTH_MM;
+
+  // The original hammer is centered at x = 72.5.
+  const HAMMER_CENTER_X = 72.5;
+
+  // Original hammer center along its length = 205 / 2.
+  const HAMMER_CENTER_Y = ORIGINAL_HAMMER_LENGTH_MM / 2;
+
+  const svg = document.getElementById("canvas");
+  const hammer = document.getElementById("hammer");
+
+  // ------------------------------------------------------------
+  // DISPLAY SIZE
+  // ------------------------------------------------------------
+
+  function fitCanvasToScreen() {
+
+    /*
+      The SVG uses a 145 x 195 coordinate system corresponding
+      to the stated physical screen dimensions.
+
+      Safari supplies CSS pixels for the viewport. The SVG keeps
+      the correct 145:195 aspect ratio and fills the available
+      screen without distortion.
+    */
+
+    const viewportWidth  = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    const screenAspect = SCREEN_HEIGHT_MM / SCREEN_WIDTH_MM;
+
+    let width;
+    let height;
+
+    if ((viewportHeight / viewportWidth) > screenAspect) {
+      width  = viewportWidth;
+      height = viewportWidth * screenAspect;
+    } else {
+      height = viewportHeight;
+      width  = viewportHeight / screenAspect;
+    }
+
+    svg.style.width  = width + "px";
+    svg.style.height = height + "px";
+  }
+
+  // ------------------------------------------------------------
+  // HAMMER ORIENTATION
+  // ------------------------------------------------------------
+
+  function showOrientation(angle) {
+
+    /*
+      Scale the original 205-mm hammer to exactly 140 mm.
+
+      Then rotate it around its own center.
+
+      Finally translate it so the scaled hammer is centered
+      on the iPad screen.
+    */
+
+    const scaledCenterX = HAMMER_CENTER_X;
+    const scaledCenterY = HAMMER_CENTER_Y;
+
+    hammer.setAttribute(
+      "transform",
+      `translate(${SCREEN_WIDTH_MM / 2} ${SCREEN_HEIGHT_MM / 2})
+       rotate(${angle})
+       scale(${SCALE})
+       translate(${-scaledCenterX} ${-scaledCenterY})`
+    );
+  }
+
+  // ------------------------------------------------------------
+  // NEXT ORIENTATION
+  // ------------------------------------------------------------
+
+  let orientationIndex = 0;
+
+  function nextOrientation() {
+    orientationIndex =
+      (orientationIndex + 1) % ORIENTATIONS.length;
+
+    showOrientation(ORIENTATIONS[orientationIndex]);
+  }
+
+  // ------------------------------------------------------------
+  // START
+  // ------------------------------------------------------------
+
+  showOrientation(ORIENTATIONS[orientationIndex]);
+  fitCanvasToScreen();
+
+  window.addEventListener("resize", fitCanvasToScreen);
+
+  window.addEventListener("orientationchange", () => {
+    setTimeout(fitCanvasToScreen, 100);
+  });
+
+  /*
+    There are no visible controls.
+
+    Tap anywhere on the iPad to advance to the next hammer
+    orientation.
+  */
+  document.body.addEventListener("click", nextOrientation);
+
+})();
+</script>
+
+</body>
+</html>
