@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Hammer Outline - Controller</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --shape: #000000;
+    --ui-bg: rgba(255,255,255,0.9);
+    --ui-text: #000000;
+    --ui-border: #000000;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    height: 78vh; /* leave room for HUD below */
+  }
+  svg { display: block; width: 90vw; height: auto; max-height: 100%; }
+
+  #hud {
+    position: fixed;
+    bottom: max(14px, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--ui-bg);
+    color: var(--ui-text);
+    border: 1px solid var(--ui-border);
+    border-radius: 10px;
+    padding: 8px 14px;
+    font: 14px -apple-system, system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    z-index: 10;
+  }
+  #hud button {
+    font: 14px -apple-system, system-ui, sans-serif;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--ui-border);
+    background: white;
+    color: black;
+  }
+  #hud button:active { background: #ddd; }
+  #label { min-width: 90px; text-align: center; }
+
+  #status {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: 8px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ccc;
+    z-index: 10;
+  }
+  #status.connected { background: #2ecc71; }
+  #status.disconnected { background: #e74c3c; }
+
+  #room {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: 24px;
+    font: 11px -apple-system, system-ui, sans-serif;
+    color: #999;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<div id="status"></div>
+<div id="room"></div>
+
+<div id="stage">
+  <svg id="art" viewBox="-72.5 -97.5 145 195" xmlns="http://www.w3.org/2000/svg">
+    <g id="hgroup">
+      <polygon id="hammer" points="
+        -17.073,-70
+        17.073,-70
+        17.073,-32.439
+        6.146,-32.439
+        6.146,70
+        -6.146,70
+        -6.146,-32.439
+        -17.073,-32.439
+      " fill="var(--shape)" />
+    </g>
+  </svg>
+</div>
+
+<div id="hud">
+  <span id="label">0°</span>
+  <button id="nextBtn">Next ›</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<script>
+  // ================== Rotation state ==================
+  const STEP_DEG = 30;
+  const NUM_STEPS = 360 / STEP_DEG; // 12
+  const group = document.getElementById('hgroup');
+  const label = document.getElementById('label');
+  let idx = 0;
+
+  function render() {
+    group.setAttribute('transform', `rotate(${idx * STEP_DEG})`);
+    label.textContent = (idx * STEP_DEG) + '°';
+  }
+  render();
+
+  // ================== Remote sync (MQTT over WebSockets) ==================
+  // Must match the room used on the iPad display, e.g.:
+  //   hammer_controller.html?room=my-secret-room-42
+  const params = new URLSearchParams(location.search);
+  const ROOM = params.get('room') || 'hammer-outline-default-room';
+  const TOPIC = `hammer-outline/${ROOM}/state`;
+
+  const statusEl = document.getElementById('status');
+  const roomEl = document.getElementById('room');
+  roomEl.textContent = ROOM;
+
+  const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+    clientId: 'hammer-controller-' + Math.random().toString(16).slice(2),
+    clean: true,
+    reconnectPeriod: 2000,
+  });
+
+  client.on('connect', () => {
+    statusEl.className = 'connected';
+    // Subscribe too, so if we reopen this page later (or another phone
+    // already set a rotation) we pick up the last known state instead
+    // of resetting everything to 0.
+    client.subscribe(TOPIC, { qos: 1 });
+  });
+
+  client.on('reconnect', () => { statusEl.className = ''; });
+  client.on('close', () => { statusEl.className = 'disconnected'; });
+  client.on('offline', () => { statusEl.className = 'disconnected'; });
+
+  client.on('message', (topic, payload) => {
+    if (topic !== TOPIC) return;
+    try {
+      const msg = JSON.parse(payload.toString());
+      if (typeof msg.idx === 'number') {
+        idx = ((msg.idx % NUM_STEPS) + NUM_STEPS) % NUM_STEPS;
+        render();
+      }
+    } catch (e) {
+      console.error('bad message', e);
+    }
+  });
+
+  function publish() {
+    // retain:true so any device that connects/reconnects later
+    // immediately gets the current rotation.
+    client.publish(TOPIC, JSON.stringify({ idx }), { qos: 1, retain: true });
+  }
+
+  function next() {
+    let newIdx;
+    do {
+      newIdx = Math.floor(Math.random() * NUM_STEPS);
+    } while (newIdx === idx && NUM_STEPS > 1);
+    idx = newIdx;
+    render();
+    publish();
+  }
+
+  document.getElementById('nextBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    next();
+  });
+
+  // Swipe also triggers a new random orientation, same as original.
+  const stage = document.getElementById('stage');
+  let touchStartX = null;
+  let touchStartY = null;
+  const SWIPE_THRESHOLD = 40;
+
+  stage.addEventListener('touchstart', (e) => {
+    const t = e.changedTouches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+  }, { passive: true });
+
+  stage.addEventListener('touchend', (e) => {
+    if (touchStartX === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    touchStartX = null;
+    touchStartY = null;
+    if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
+    next();
+  }, { passive: true });
+</script>
+
+</body>
+</html>
