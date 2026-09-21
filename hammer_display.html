@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Hammer Outline - Display</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --shape: #000000;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    height: 100vh;
+  }
+  svg { display: block; }
+
+  /* Tiny, unobtrusive connection indicator - only really noticeable if
+     something is wrong, so it doesn't interfere with the physical
+     matching tool's clean white/black presentation. */
+  #status {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: 8px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ccc;
+    z-index: 10;
+  }
+  #status.connected { background: #2ecc71; }
+  #status.disconnected { background: #e74c3c; }
+
+  #room {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: 24px;
+    font: 11px -apple-system, system-ui, sans-serif;
+    color: #999;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<div id="status"></div>
+<div id="room"></div>
+
+<div id="stage">
+  <!--
+    viewBox is in REAL MILLIMETERS, centered on (0,0).
+    Screen physical size used: 145mm x 195mm (per spec).
+    The <svg> element's actual on-screen width/height (set in JS below)
+    are computed in true CSS points for this iPad's known 132 pt/inch
+    display, so 1 unit in this drawing = 1 real millimeter on screen.
+  -->
+  <svg id="art" viewBox="-72.5 -97.5 145 195" xmlns="http://www.w3.org/2000/svg">
+    <g id="hgroup">
+      <polygon id="hammer" points="
+        -17.073,-70
+        17.073,-70
+        17.073,-32.439
+        6.146,-32.439
+        6.146,70
+        -6.146,70
+        -6.146,-32.439
+        -17.073,-32.439
+      " fill="var(--shape)" />
+    </g>
+  </svg>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<script>
+  // ================== Physical calibration (iPad, unchanged) ==================
+  const PT_PER_MM = 132 / 25.4;
+  const SCREEN_W_MM = 145;
+  const SCREEN_H_MM = 195;
+  const svg = document.getElementById('art');
+
+  function sizeSvg() {
+    const wPt = SCREEN_W_MM * PT_PER_MM;
+    const hPt = SCREEN_H_MM * PT_PER_MM;
+    svg.style.width = wPt + 'px';
+    svg.style.height = hPt + 'px';
+  }
+  sizeSvg();
+  window.addEventListener('resize', sizeSvg);
+  window.addEventListener('orientationchange', sizeSvg);
+
+  // ================== Rotation state ==================
+  const STEP_DEG = 30;
+  const NUM_STEPS = 360 / STEP_DEG; // 12
+  const group = document.getElementById('hgroup');
+  let idx = 0;
+
+  function render() {
+    group.setAttribute('transform', `rotate(${idx * STEP_DEG})`);
+  }
+  render();
+
+  // ================== Remote sync (MQTT over WebSockets) ==================
+  // Change this room string to anything unique - it just needs to match
+  // on BOTH the iPad display and the phone controller. You can also
+  // override it per-device with a URL query param, e.g.:
+  //   hammer_display.html?room=my-secret-room-42
+  const params = new URLSearchParams(location.search);
+  const ROOM = params.get('room') || 'hammer-outline-default-room';
+  const TOPIC = `hammer-outline/${ROOM}/state`;
+
+  const statusEl = document.getElementById('status');
+  const roomEl = document.getElementById('room');
+  roomEl.textContent = ROOM;
+
+  const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+    clientId: 'hammer-display-' + Math.random().toString(16).slice(2),
+    clean: true,
+    reconnectPeriod: 2000,
+  });
+
+  client.on('connect', () => {
+    statusEl.className = 'connected';
+    client.subscribe(TOPIC, { qos: 1 });
+  });
+
+  client.on('reconnect', () => { statusEl.className = ''; });
+  client.on('close', () => { statusEl.className = 'disconnected'; });
+  client.on('offline', () => { statusEl.className = 'disconnected'; });
+
+  client.on('message', (topic, payload) => {
+    if (topic !== TOPIC) return;
+    try {
+      const msg = JSON.parse(payload.toString());
+      if (typeof msg.idx === 'number') {
+        idx = ((msg.idx % NUM_STEPS) + NUM_STEPS) % NUM_STEPS;
+        render();
+      }
+    } catch (e) {
+      console.error('bad message', e);
+    }
+  });
+</script>
+
+</body>
+</html>
