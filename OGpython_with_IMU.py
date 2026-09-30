@@ -1,6 +1,6 @@
 """ 
 ========================================
-Python GUI + Arduino Button Task System + AMTI Force Plate + Xsens Awinda IMUs
+Python GUI + Arduino Button Task System + AMTI Force Plate
 ========================================
 
 FUNCTION:
@@ -14,29 +14,22 @@ FUNCTION:
     Marker 2 = button confirmed lit (hardware feedback)
     Marker 4 = button pressed
 - Records AMTI AccuSway force plate data at 1000 Hz per condition.
-- Records Xsens Awinda IMU data per condition via the AwindaMarkerRecorder C# app.
-- Force plate AND IMUs start when spacebar is pressed, and stop together after the
-  last trial finishes.
-- Saves one force plate .txt per condition to C:\\AMTI\\PythonResults\\
-- Saves one .mtb + .csv + _events.csv per condition to C:\\AMTI\\PythonResults\\IMU\\
-- Marker columns (numeric + text label) embedded in force plate data and in the
-  IMU events file, using the same codes and labels.
+- Force plate starts when spacebar is pressed, stops after last trial finishes.
+- Saves one .txt file per condition to C:\AMTI\PythonResults\
+- Marker columns (numeric + text label) embedded in force plate data.
 
 HARDWARE CONNECTIONS (Arduino side):
-Buttons: Pins 2-5
-LEDs (NeoPixels): Pins 6-9
+Buttons: Pins 2–5
+LEDs (NeoPixels): Pins 6–9
 
 DEPENDENCIES:
   pip install pyserial pylsl pandas openpyxl
   AMTI AMTIUSBDevice.dll must be installed (comes with NetForce)
-  AwindaMarkerRecorder.exe must be built and RUNNING before this script starts
-  (it listens on 127.0.0.1:5555). Set IMU_EXE_PATH below to auto-launch it.
 """
 
 import os
 import sys
 import serial
-import socket
 import time
 import random
 import threading
@@ -49,7 +42,9 @@ from ctypes import cdll, c_float, sizeof
 import subprocess
 from pylsl import StreamInfo, StreamOutlet
 
-
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from imu_client import IMUClient
+imu = IMUClient()
 # =====================================================
 #                TERMINAL LOG CAPTURE
 # =====================================================
@@ -126,190 +121,6 @@ def shutdown_force_plate():
 
 
 # =====================================================
-#        XSENS AWINDA IMU CLIENT  (NEW SECTION)
-# =====================================================
-# Talks to AwindaMarkerRecorder.exe over a localhost socket.
-# Command set (one line each, one reply line each):
-#   PING / SETDIR <folder> / CONNECT <n> / PREPARE <name> / GO / MARK <code> <label>
-#   / STOP / QUIT
-# Every call is failure-tolerant: if the IMU app is missing or errors, the rest of
-# the experiment (force plate, LSL, Arduino) keeps running normally.
-
-IMU_ENABLED      = True                                  # set False to run without IMUs
-IMU_HOST         = "127.0.0.1"
-IMU_PORT         = 5555                                  # must match CommandPort in RecorderForm.cs
-IMU_SENSOR_COUNT = 2                                     # how many MTw sensors must join
-IMU_SAVE_FOLDER  = r'C:\AMTI\PythonResults\IMU'
-IMU_EXE_PATH     = r'C:\Users\rpier12\AwindaMarkerRecorder\bin\Debug\net10.0-windows\AwindaMarkerRecorder.exe'
-IMU_AUTOLAUNCH   = True                                  # launch the .exe if it isn't already running
-
-_imu_sock         = None
-_imu_lock         = threading.Lock()
-_imu_proc         = None
-_imu_prepare_done = threading.Event()
-_imu_prepare_ok   = False
-
-
-def _imu_send(cmd, timeout=15.0):
-    """Send one command, return the reply string, or None on failure."""
-    global _imu_sock
-    if not IMU_ENABLED or _imu_sock is None:
-        return None
-    with _imu_lock:
-        try:
-            _imu_sock.settimeout(timeout)
-            _imu_sock.sendall((cmd + "\n").encode("ascii", "replace"))
-            resp = b""
-            while not resp.endswith(b"\n"):
-                chunk = _imu_sock.recv(4096)
-                if not chunk:
-                    raise ConnectionError("IMU recorder closed the connection")
-                resp += chunk
-            reply = resp.decode("ascii", "replace").strip()
-        except Exception as e:
-            print(f"IMU command failed ('{cmd}'): {e}")
-            try:
-                _imu_sock.close()
-            except Exception:
-                pass
-            _imu_sock = None
-            return None
-    if reply.startswith("ERR"):
-        print(f"IMU error on '{cmd}': {reply}")
-    return reply
-
-
-def _imu_open_socket(timeout=20.0):
-    """Open the TCP connection to AwindaMarkerRecorder.exe."""
-    global _imu_sock
-    deadline = time.time() + timeout
-    last_err = None
-    while time.time() < deadline:
-        try:
-            s = socket.create_connection((IMU_HOST, IMU_PORT), timeout=5)
-            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            _imu_sock = s
-            return True
-        except OSError as e:
-            last_err = e
-            time.sleep(0.5)
-    print(f"Could not reach IMU recorder on {IMU_HOST}:{IMU_PORT} — {last_err}")
-    return False
-
-
-def imu_startup():
-    """Launch (optionally), connect to, and radio-link the Awinda system. Call once."""
-    global _imu_proc
-    if not IMU_ENABLED:
-        print("IMU recording DISABLED (IMU_ENABLED = False).")
-        return False
-
-    if not _imu_open_socket(timeout=3.0) and IMU_AUTOLAUNCH:
-        if os.path.exists(IMU_EXE_PATH):
-            print("Launching AwindaMarkerRecorder.exe ...")
-            try:
-                _imu_proc = subprocess.Popen([IMU_EXE_PATH],
-                                             cwd=os.path.dirname(IMU_EXE_PATH))
-            except Exception as e:
-                print(f"Failed to launch IMU app: {e}")
-            _imu_open_socket(timeout=30.0)
-        else:
-            print(f"IMU app not found at {IMU_EXE_PATH} — start it manually.")
-
-    if _imu_sock is None:
-        print("*** IMU SYSTEM UNAVAILABLE — experiment will run WITHOUT IMU data. ***")
-        return False
-
-    _imu_send(f"SETDIR {IMU_SAVE_FOLDER}", timeout=10)
-    print("Connecting Awinda station and waiting for sensors "
-          "(undock / power on the MTw sensors now) ...")
-    reply = _imu_send(f"CONNECT {IMU_SENSOR_COUNT}", timeout=120)
-    if reply and reply.startswith("OK"):
-        print(f"IMU system ready: {reply}")
-        return True
-    print("*** IMU system failed to connect — experiment will run WITHOUT IMU data. ***")
-    return False
-
-
-def imu_prepare_async(session_name):
-    """Arm the IMUs for one condition (config + file creation) in the background."""
-    global _imu_prepare_ok
-    _imu_prepare_done.clear()
-    _imu_prepare_ok = False
-
-    if not IMU_ENABLED or _imu_sock is None:
-        _imu_prepare_done.set()
-        return
-
-    def _worker():
-        global _imu_prepare_ok
-        reply = _imu_send(f"PREPARE {session_name}", timeout=90)
-        _imu_prepare_ok = bool(reply and reply.startswith("OK"))
-        if _imu_prepare_ok:
-            print(f"IMU armed for: {session_name}")
-        else:
-            print("IMU failed to arm — no IMU data for this condition.")
-        _imu_prepare_done.set()
-
-    threading.Thread(target=_worker, daemon=True).start()
-
-
-def imu_wait_ready(timeout=90):
-    """Block until arming finishes (normally already done by spacebar time)."""
-    _imu_prepare_done.wait(timeout)
-    return _imu_prepare_ok
-
-
-def imu_go():
-    """Start IMU recording. Returns the recorder's unix start time, or None."""
-    if not _imu_prepare_ok:
-        return None
-    reply = _imu_send("GO", timeout=15)
-    if reply and reply.startswith("OK GO"):
-        t = float(reply.split()[2])
-        print(f"IMU recording started (unix {t:.6f} = "
-              f"{datetime.fromtimestamp(t).strftime('%H:%M:%S.%f')[:-3]})")
-        return t
-    return None
-
-
-def imu_mark(code, label):
-    """Stamp the IMU events file with the same code/label as the force plate."""
-    if not _imu_prepare_ok:
-        return
-    _imu_send(f"MARK {int(code)} {label}", timeout=5)
-
-
-def imu_stop():
-    """Stop IMU recording and close this condition's files."""
-    global _imu_prepare_ok
-    if not IMU_ENABLED or _imu_sock is None:
-        return
-    reply = _imu_send("STOP", timeout=30)
-    if reply and reply.startswith("OK"):
-        print(f"IMU recording stopped — files in {IMU_SAVE_FOLDER}")
-    _imu_prepare_ok = False
-    _imu_prepare_done.clear()
-
-
-def imu_shutdown():
-    """Release the radio and close the connection. Call once on exit."""
-    global _imu_sock
-    if _imu_sock is None:
-        return
-    try:
-        _imu_send("QUIT", timeout=15)
-    except Exception:
-        pass
-    try:
-        _imu_sock.close()
-    except Exception:
-        pass
-    _imu_sock = None
-    print("IMU system shut down.")
-
-
-# =====================================================
 #         FORCE PLATE RECORDING — PER CONDITION
 # =====================================================
 
@@ -320,13 +131,6 @@ _fp_current_marker_label = ""
 _fp_stop_event = threading.Event()
 _fp_thread     = None
 _fp_data_rows  = []
-
-
-def session_name(condition_name, order_number, is_repeat):
-    """Single source of truth for file naming — used by BOTH the force plate
-    and the IMU recorder so the two files for a condition always match."""
-    suffix = "Repeat" if is_repeat else str(order_number)
-    return f"{condition_name} ({suffix})"
 
 
 def set_fp_marker(code, label):
@@ -374,26 +178,25 @@ def _fp_recording_loop():
 
 
 def start_fp_recording():
-    """Starts the force plate AND the IMUs together."""
     global _fp_thread
     _fp_stop_event.clear()
     _fp_thread = threading.Thread(target=_fp_recording_loop, daemon=True)
     _fp_thread.start()
-    # ---- IMU STARTS HERE, same instant as the force plate ----
-    imu_go()
 
 
 def stop_fp_recording():
-    """Stops the force plate AND the IMUs together."""
     _fp_stop_event.set()
     if _fp_thread is not None:
         _fp_thread.join(timeout=5)
-    # ---- IMU STOPS HERE, same instant as the force plate ----
-    imu_stop()
 
 
 def save_fp_data(condition_name, order_number, is_repeat):
-    safe_name = session_name(condition_name, order_number, is_repeat)
+    if is_repeat:
+        suffix = "Repeat"
+    else:
+        suffix = str(order_number)
+
+    safe_name = f"{condition_name} ({suffix})"
     filename  = safe_name + ".txt"
     full_path = os.path.join(FORCE_PLATE_SAVE_FOLDER, filename)
 
@@ -443,15 +246,11 @@ MARKER_BUTTON_LIT       = 2
 MARKER_BUTTON_PRESSED   = 4
 
 def send_marker(marker_value, label=""):
-    """Send LSL marker to Aurora + BrainVision, stamp the force plate file,
-    AND stamp the IMU events file."""
     lsl_outlet.push_sample([marker_value])
     bv_outlet.push_sample([marker_value])
     set_fp_marker(marker_value, label)
+    imu.mark(marker_value, label)          # <-- ADD
     print(f"LSL Marker sent: {marker_value} ({label})")
-    # ---- IMU marker last, so it can never delay the LSL/force-plate stamps ----
-    imu_mark(marker_value, label)
-
 
 # =====================================================
 #                TIME SYNC
@@ -555,9 +354,8 @@ def show_instructions(cond_name, trials, is_repeat=False):
         "\n\n" + instruction_lines +
         "\n\nAfter instructing participant, press SPACEBAR to begin "
         "10-second fixation cross and trials.\n\n"
-        "Markers will be placed in fNIRS data, EEG, force plate, IMU data, and button log "
-        "corresponding to buttons being lit and pressed.\n\n"
-        "NOTE: Force plate AND IMU recording will START when you press SPACEBAR."
+        "Markers will be placed in fNIRS data, EEG, and button log corresponding to buttons being lit and pressed.\n\n"
+        "NOTE: Force plate recording will START when you press SPACEBAR."
     )
 
     instr_window = tk.Toplevel(root)
@@ -572,9 +370,7 @@ def show_instructions(cond_name, trials, is_repeat=False):
     def on_space(event):
         space_pressed.set()
         instr_window.destroy()
-        # ---- MAKE SURE THE IMUs ARE ARMED (normally already done) ----
-        imu_wait_ready()
-        # ---- START FORCE PLATE + IMU RECORDING HERE ----
+        # ---- START FORCE PLATE RECORDING HERE ----
         start_fp_recording()
         # ---- LOOK-DOWN BEEP at 8.5 seconds into fixation ----
         def _delayed_lookdown_beep():
@@ -598,7 +394,7 @@ def stop_experiment():
     global stop_requested
     log_gui_event("stop_button_clicked")
     stop_requested = True
-    stop_fp_recording()          # also stops the IMUs
+    stop_fp_recording()
     send_arduino("ALL_OFF")
     next_btn.config(state="normal")
 
@@ -920,12 +716,7 @@ def run_current_condition():
         cond_name, trials = remaining_conditions[0]
 
     current_condition_name = cond_name
-
-    # ---------------- ARM THE IMUs FOR THIS CONDITION ----------------
-    # Runs in the background while the operator reads the instructions, so that
-    # SPACEBAR can start the IMUs and force plate at the same instant.
-    expected_order = condition_order_counter if is_redo_run else condition_order_counter + 1
-    imu_prepare_async(session_name(cond_name, expected_order, is_redo_run))
+    imu.set_condition(f"{cond_name} (REPEAT)" if is_redo_run else cond_name)
 
     # ---------------- SHOW INSTRUCTIONS + SPACEBAR ----------------
     show_instructions(cond_name, trials, is_redo_run)
@@ -961,8 +752,8 @@ def run_current_condition():
     # ---------------- RUN TRIALS ----------------
     run_trials(trials, cond_name)
 
-    # ---------------- STOP FORCE PLATE + IMUs, THEN SAVE ----------------
-    stop_fp_recording()          # also stops the IMUs and closes their files
+    # ---------------- STOP FORCE PLATE + SAVE ----------------
+    stop_fp_recording()
     save_fp_data(cond_name, condition_order_counter, is_redo_run)
 
     if stop_requested:
@@ -1045,9 +836,9 @@ def save_log_on_exit():
     stop_requested = True
 
     try:
-        stop_fp_recording()      # also stops the IMUs
+        stop_fp_recording()
     except Exception as e:
-        print("Error stopping force plate / IMUs on exit:", e)
+        print("Error stopping force plate on exit:", e)
 
     try:
         send_arduino("ALL_OFF")
@@ -1072,15 +863,16 @@ def save_log_on_exit():
     except Exception as e:
         print("Error saving Excel log:", e)
 
+    imu.stop_and_save()
     # ---- SAVE TERMINAL LOG LAST (captures everything above) ----
     save_terminal_log()
 
     try:
         arduino.close()
+        imu.close()
     except Exception as e:
         _tee_logger._original.write(f"Error closing Arduino serial: {e}\n")
 
-    imu_shutdown()
     shutdown_force_plate()
     root.destroy()
 
@@ -1100,8 +892,9 @@ redo_btn.config(command=redo_current_condition)
 #                STARTUP + MAIN LOOP
 # =====================================================
 
-init_force_plate()   # Connect to plate once at startup
-imu_startup()        # Connect to Awinda station + sensors once at startup
+init_force_plate()
+imu.connect()      # <-- ADD
+imu.start()        # <-- ADD
 
 root.protocol("WM_DELETE_WINDOW", save_log_on_exit)
 root.mainloop()
