@@ -110,14 +110,13 @@
   window.addEventListener('orientationchange', sizeSvg);
 
   // ================== Rotation state ==================
-  const ANGLES_DEG = [45, 135];
+  const ANGLES_DEG = [45, 315];
   const NUM_STEPS = ANGLES_DEG.length; // 2
   const group = document.getElementById('hgroup');
   let idx = 0;
 
   function render() {
-    const rotation = idx === 0 ? 45 : -135;
-    group.setAttribute('transform', `rotate(${rotation})`);
+    group.setAttribute('transform', `rotate(${ANGLES_DEG[idx]})`);
   }
   render();
 
