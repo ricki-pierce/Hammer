@@ -119,7 +119,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
 <script>
   // ================== Rotation state ==================
-  const ANGLES_DEG = [45, 135];
+  const ANGLES_DEG = [45, 315];
   const NUM_STEPS = ANGLES_DEG.length; // 2
   const group = document.getElementById('hgroup');
   const label = document.getElementById('label');
@@ -127,8 +127,7 @@
   let consecutiveCount = 1;
 
 function render() {
-  const rotation = idx === 0 ? -45 : -135;
-  group.setAttribute('transform', `rotate(${rotation})`);
+  group.setAttribute('transform', `rotate(${ANGLES_DEG[idx]})`);
   label.textContent = ANGLES_DEG[idx] + '°';
 }
   render();
