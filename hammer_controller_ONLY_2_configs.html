@@ -127,7 +127,8 @@
   let consecutiveCount = 1;
 
 function render() {
-  group.setAttribute('transform', `rotate(${ANGLES_DEG[idx]})`);
+  const rotation = idx === 0 ? -45 : -135;
+  group.setAttribute('transform', `rotate(${rotation})`);
   label.textContent = ANGLES_DEG[idx] + '°';
 }
   render();
