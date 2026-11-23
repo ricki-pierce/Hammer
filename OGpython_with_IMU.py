@@ -151,32 +151,182 @@ amti = cdll.AMTIUSBDevice
 
 import re
 
+
 def ask_subject_and_round():
     dlg = tk.Toplevel(root)
     dlg.title("Session Info")
-    dlg.geometry("350x200")
+    dlg.geometry("400x480")
     dlg.grab_set()
+
     result = {}
 
-    tk.Label(dlg, text="Subject name/ID:", font=("Arial", 12)).pack(pady=(15, 0))
-    subj_entry = tk.Entry(dlg, font=("Arial", 12)); subj_entry.pack()
-    tk.Label(dlg, text="Round (1, 2, 3...):", font=("Arial", 12)).pack(pady=(10, 0))
-    round_entry = tk.Entry(dlg, font=("Arial", 12)); round_entry.pack()
+    # --------------------------------
+    # SUBJECT ID
+    # --------------------------------
+    tk.Label(dlg, text="Subject name/ID:",
+             font=("Arial", 12)).pack(pady=(15, 0))
 
+    subj_entry = tk.Entry(dlg, font=("Arial", 12))
+    subj_entry.pack()
+
+    # --------------------------------
+    # ROUND
+    # --------------------------------
+    tk.Label(dlg, text="Round (1, 2, 3...):",
+             font=("Arial", 12)).pack(pady=(10, 0))
+
+    round_entry = tk.Entry(dlg, font=("Arial", 12))
+    round_entry.pack()
+
+    # --------------------------------
+    # HEIGHT
+    # --------------------------------
+    tk.Label(dlg, text="Participant Height:",
+             font=("Arial", 12, "bold")).pack(pady=(15, 0))
+
+    height_frame = tk.Frame(dlg)
+    height_frame.pack(pady=3)
+
+    height_entry = tk.Entry(height_frame, font=("Arial", 12), width=10)
+    height_entry.pack(side="left", padx=5)
+
+    height_unit = tk.StringVar(value="cm")
+
+    height_m = tk.BooleanVar(value=False)
+    height_cm = tk.BooleanVar(value=True)
+
+    def select_height_unit(unit):
+        height_unit.set(unit)
+        height_m.set(unit == "m")
+        height_cm.set(unit == "cm")
+
+    tk.Checkbutton(
+        height_frame,
+        text="Meters (m)",
+        variable=height_m,
+        command=lambda: select_height_unit("m")
+    ).pack(side="left", padx=3)
+
+    tk.Checkbutton(
+        height_frame,
+        text="Centimeters (cm)",
+        variable=height_cm,
+        command=lambda: select_height_unit("cm")
+    ).pack(side="left", padx=3)
+
+    # --------------------------------
+    # WEIGHT
+    # --------------------------------
+    tk.Label(dlg, text="Participant Weight:",
+             font=("Arial", 12, "bold")).pack(pady=(15, 0))
+
+    weight_frame = tk.Frame(dlg)
+    weight_frame.pack(pady=3)
+
+    weight_entry = tk.Entry(weight_frame, font=("Arial", 12), width=10)
+    weight_entry.pack(side="left", padx=5)
+
+    weight_unit = tk.StringVar(value="kg")
+
+    weight_kg = tk.BooleanVar(value=True)
+    weight_lb = tk.BooleanVar(value=False)
+
+    def select_weight_unit(unit):
+        weight_unit.set(unit)
+        weight_kg.set(unit == "kg")
+        weight_lb.set(unit == "lb")
+
+    tk.Checkbutton(
+        weight_frame,
+        text="Kilograms (kg)",
+        variable=weight_kg,
+        command=lambda: select_weight_unit("kg")
+    ).pack(side="left", padx=3)
+
+    tk.Checkbutton(
+        weight_frame,
+        text="Pounds (lb)",
+        variable=weight_lb,
+        command=lambda: select_weight_unit("lb")
+    ).pack(side="left", padx=3)
+
+    # --------------------------------
+    # VALIDATION + SAVE
+    # --------------------------------
     def ok():
-        s, r = subj_entry.get().strip(), round_entry.get().strip()
+
+        s = subj_entry.get().strip()
+        r = round_entry.get().strip()
+        h = height_entry.get().strip()
+        w = weight_entry.get().strip()
+
         if not re.fullmatch(r"[A-Za-z0-9]+", s) or not r.isdigit():
-            messagebox.showerror("Invalid", "Subject: letters/numbers only.\nRound: a number.", parent=dlg)
+            messagebox.showerror(
+                "Invalid",
+                "Subject: letters/numbers only.\nRound: a number.",
+                parent=dlg
+            )
             return
-        result["subject"], result["round"] = s, r
+
+        try:
+            h = float(h)
+            w = float(w)
+
+            if h <= 0 or w <= 0:
+                raise ValueError
+
+        except ValueError:
+            messagebox.showerror(
+                "Invalid Measurements",
+                "Please enter a valid positive number for both height and weight.",
+                parent=dlg
+            )
+            return
+
+        result["subject"] = s
+        result["round"] = r
+
+        result["height"] = h
+        result["height_unit"] = height_unit.get()
+
+        result["weight"] = w
+        result["weight_unit"] = weight_unit.get()
+
         dlg.destroy()
 
-    tk.Button(dlg, text="OK", font=("Arial", 12), command=ok).pack(pady=15)
-    dlg.protocol("WM_DELETE_WINDOW", lambda: None)
-    root.wait_window(dlg)
-    return result["subject"], result["round"]
+    tk.Button(
+        dlg,
+        text="OK",
+        font=("Arial", 12),
+        command=ok
+    ).pack(pady=20)
 
-SUBJECT, ROUND = ask_subject_and_round()
+    dlg.protocol("WM_DELETE_WINDOW", lambda: None)
+
+    root.wait_window(dlg)
+
+    return (
+        result["subject"],
+        result["round"],
+        result["height"],
+        result["height_unit"],
+        result["weight"],
+        result["weight_unit"]
+    )
+
+
+SUBJECT, ROUND, HEIGHT, HEIGHT_UNIT, WEIGHT, WEIGHT_UNIT = ask_subject_and_round()
+# --------------------------------
+# LOG PARTICIPANT INFORMATION
+# --------------------------------
+
+print("\n========== PARTICIPANT INFORMATION ==========")
+print(f"Subject ID: {SUBJECT}")
+print(f"Round: {ROUND}")
+print(f"Height: {HEIGHT} {HEIGHT_UNIT}")
+print(f"Weight: {WEIGHT} {WEIGHT_UNIT}")
+print("=============================================\n")
+
 FORCE_PLATE_SAVE_FOLDER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "Force Plate Results",
