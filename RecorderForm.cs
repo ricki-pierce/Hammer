@@ -78,7 +78,7 @@ namespace AwindaMarkerRecorder
         {
             Index = index;
             Device = device;
-            SensorId = device.deviceId().ToString();
+            SensorId = device.deviceId().ToString().ToString();   // XsDeviceId -> XsString -> string
         }
 
         public bool DataAvailable()
@@ -129,7 +129,7 @@ namespace AwindaMarkerRecorder
     {
         private const int DesiredUpdateRate = 60;      // Hz
         private const int DesiredRadioChannel = 11;     // 11-25
-        private const string LogDir = @"C:\Users\rpier12\Documents\IMUData";
+        private const string LogDir = @"C:\Users\Generic\Documents\IMUData";
 
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -293,7 +293,7 @@ namespace AwindaMarkerRecorder
                     if (dev.setOutputConfiguration(BuildConfig(tier)))
                     {
                         ok = true;
-                        Log?.Invoke($"Sensor {dev.deviceId()}: output configuration tier {tier} accepted " +
+                        Log?.Invoke($"Sensor {dev.deviceId().ToString().ToString()}: output configuration tier {tier} accepted " +
                                     "(1 = all data, 2 = no pressure/delta, 3 = basic).");
                     }
                 }
