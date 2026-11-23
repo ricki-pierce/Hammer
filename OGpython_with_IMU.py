@@ -15,7 +15,7 @@ FUNCTION:
     Marker 4 = button pressed
 - Records AMTI AccuSway force plate data at 1000 Hz per condition.
 - Force plate starts when spacebar is pressed, stops after last trial finishes.
-- Saves one .txt file per condition to C:\AMTI\PythonResults\
+- Saves one .txt file per condition to C:\\AMTI\\PythonResults\\
 - Marker columns (numeric + text label) embedded in force plate data.
 
 HARDWARE CONNECTIONS (Arduino side):
@@ -29,12 +29,14 @@ DEPENDENCIES:
 
 import os
 import sys
+sys.path.insert(0, r"C:\Users\Generic")
 import serial
 import time
 import random
 import threading
 import winsound
 import tkinter as tk
+root = tk.Tk()
 import pandas as pd
 from tkinter import ttk, messagebox, font
 from datetime import datetime
@@ -45,6 +47,63 @@ from pylsl import StreamInfo, StreamOutlet
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from imu_client import IMUClient
 imu = IMUClient()
+
+
+import re
+import glob
+
+def fmt_ts(t):
+    t = float(t)
+    if t > 1e15:          # nanoseconds -> seconds, just in case
+        t /= 1e9
+    return datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+def _read_table(path):
+    # auto-detects comma vs tab
+    return pd.read_csv(path, sep=None, engine="python")
+
+def clean_imu_files(save_reply):
+    """save_reply is the 'OK <path>' string returned by imu.stop_and_save()."""
+    if not save_reply or not save_reply.startswith("OK"):
+        print("IMU cleanup skipped: no valid SAVE reply.")
+        return
+    session_path = save_reply[2:].strip()
+    base, ext = os.path.splitext(session_path)
+    events_path = f"{base}_events{ext}"
+    if not os.path.exists(events_path):
+        found = glob.glob(f"{base}_events.*")
+        events_path = found[0] if found else None
+
+    # ---- session file ----
+    try:
+        df = _read_table(session_path)
+        df.drop(columns=["battery_pct", "rssi", "marker_code", "marker_label",
+                         "status_word", "sample_time_coarse", "sample_time_fine",
+                         "sensor_utc", "pc_datetime_utc"],
+                errors="ignore", inplace=True)
+        df["t_unix"] = df["t_unix"].map(fmt_ts)
+        if "pc_datetime_local" in df.columns:
+            df["pc_datetime_local"] = df["t_unix"]
+        out = base + ".xlsx"
+        df.to_excel(out, index=False)
+        print(f"Cleaned IMU session file saved: {out}")
+    except Exception as e:
+        print(f"Error cleaning IMU session file: {e}")
+
+    # ---- events file ----
+    if events_path:
+        try:
+            ev = _read_table(events_path)
+            for col in ("t_unix", "python_t_unix"):
+                if col in ev.columns:
+                    ev[col] = ev[col].map(fmt_ts)
+            out = os.path.splitext(events_path)[0] + ".xlsx"
+            ev.to_excel(out, index=False)
+            print(f"Cleaned IMU events file saved: {out}")
+        except Exception as e:
+            print(f"Error cleaning IMU events file: {e}")
+    else:
+        print("IMU events file not found.")
 # =====================================================
 #                TERMINAL LOG CAPTURE
 # =====================================================
@@ -82,7 +141,6 @@ sys.stdout  = _tee_logger
 # =====================================================
 
 FORCE_PLATE_SAVE_FOLDER = r'C:\AMTI\PythonResults'
-os.makedirs(FORCE_PLATE_SAVE_FOLDER, exist_ok=True)
 
 SAMPLING_RATE = 1000   # Hz — hard coded, no prompt needed
 SAMPLE_SIZE   = 8      # values per sample from DLL
@@ -90,6 +148,42 @@ BLOCK_SIZE    = 16     # DLL always returns 16 samples at a time
 BUF_SIZE      = SAMPLE_SIZE * BLOCK_SIZE
 
 amti = cdll.AMTIUSBDevice
+
+import re
+
+def ask_subject_and_round():
+    dlg = tk.Toplevel(root)
+    dlg.title("Session Info")
+    dlg.geometry("350x200")
+    dlg.grab_set()
+    result = {}
+
+    tk.Label(dlg, text="Subject name/ID:", font=("Arial", 12)).pack(pady=(15, 0))
+    subj_entry = tk.Entry(dlg, font=("Arial", 12)); subj_entry.pack()
+    tk.Label(dlg, text="Round (1, 2, 3...):", font=("Arial", 12)).pack(pady=(10, 0))
+    round_entry = tk.Entry(dlg, font=("Arial", 12)); round_entry.pack()
+
+    def ok():
+        s, r = subj_entry.get().strip(), round_entry.get().strip()
+        if not re.fullmatch(r"[A-Za-z0-9]+", s) or not r.isdigit():
+            messagebox.showerror("Invalid", "Subject: letters/numbers only.\nRound: a number.", parent=dlg)
+            return
+        result["subject"], result["round"] = s, r
+        dlg.destroy()
+
+    tk.Button(dlg, text="OK", font=("Arial", 12), command=ok).pack(pady=15)
+    dlg.protocol("WM_DELETE_WINDOW", lambda: None)
+    root.wait_window(dlg)
+    return result["subject"], result["round"]
+
+SUBJECT, ROUND = ask_subject_and_round()
+FORCE_PLATE_SAVE_FOLDER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "Force Plate Results",
+    f"{SUBJECT} - {ROUND}"
+)
+os.makedirs(FORCE_PLATE_SAVE_FOLDER, exist_ok=True)
+
 
 def init_force_plate():
     """Initialize AMTI DLL and select device. Call once at startup."""
@@ -281,7 +375,6 @@ time.sleep(2)
 #                GUI SETUP (Tkinter)
 # =====================================================
 
-root = tk.Tk()
 root.title("Button Task")
 root.geometry("600x400")
 root.configure(bg="white")
@@ -817,7 +910,7 @@ def save_terminal_log():
         lines = _tee_logger.get_lines()
         if lines:
             df = pd.DataFrame(lines)
-            save_folder = r"C:\Users\rpier12\Python Results"
+            save_folder = r"C:\Users\Generic\Python Results"
             os.makedirs(save_folder, exist_ok=True)
             file_path = os.path.join(
                 save_folder,
@@ -831,50 +924,82 @@ def save_terminal_log():
         _tee_logger._original.write(f"Error saving terminal log: {e}\n")
 
 
+
 def save_log_on_exit():
     global stop_requested
     stop_requested = True
 
+    # ---- STOP FORCE PLATE ----
     try:
         stop_fp_recording()
     except Exception as e:
         print("Error stopping force plate on exit:", e)
 
+    # ---- TURN OFF ARDUINO LEDs ----
     try:
         send_arduino("ALL_OFF")
         log_gui_event("gui_closed_all_off")
     except Exception as e:
         print("Error turning off Arduino LEDs:", e)
 
+    # ---- SAVE BUTTON TASK LOG ----
     try:
         if event_log:
             df = pd.DataFrame(event_log)
             df.sort_values("timestamp", inplace=True)
-            save_folder = r"C:\Users\rpier12\Python Results"
+
+            save_folder = r"C:\Users\Generic\Python Results"
             os.makedirs(save_folder, exist_ok=True)
+
             file_path = os.path.join(
                 save_folder,
                 f"button_task_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
+
             df.to_excel(file_path, index=False)
             print(f"Log saved to {file_path}")
         else:
             print("No events to save.")
+
     except Exception as e:
         print("Error saving Excel log:", e)
 
-    imu.stop_and_save()
-    # ---- SAVE TERMINAL LOG LAST (captures everything above) ----
-    save_terminal_log()
+    # ---- SAVE AND CLEAN IMU FILES ----
+    try:
+        imu_reply = imu.stop_and_save()
+        print("IMU save response:", imu_reply)
 
+        clean_imu_files(imu_reply)
+
+    except Exception as e:
+        print(f"IMU save failed: {e}")
+
+    # ---- SAVE TERMINAL LOG ----
+    try:
+        save_terminal_log()
+    except Exception as e:
+        print("Error saving terminal log:", e)
+
+    # ---- CLOSE CONNECTIONS ----
     try:
         arduino.close()
+    except Exception as e:
+        print("Error closing Arduino:", e)
+
+    try:
         imu.close()
     except Exception as e:
-        _tee_logger._original.write(f"Error closing Arduino serial: {e}\n")
+        print("Error closing IMU:", e)
 
-    shutdown_force_plate()
+    # ---- SHUT DOWN FORCE PLATE ----
+    try:
+        shutdown_force_plate()
+    except Exception as e:
+        print("Error shutting down force plate:", e)
+
+    # ---- CLOSE GUI ----
     root.destroy()
+
 
 
 # =====================================================
